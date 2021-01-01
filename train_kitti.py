@@ -16,7 +16,9 @@ from lilanet.datasets import KITTI, Normalize, Compose, RandomHorizontalFlip
 from lilanet.datasets.transforms import ToTensor
 from lilanet.model import LiLaNet
 from lilanet.utils import save
-
+torch.backends.cudnn.benchmark = True
+torch.backends.cudnn.deterministic = True
+torch.cuda.empty_cache()
 
 def get_data_loaders(data_dir, batch_size, val_batch_size, num_workers):
     normalize = Normalize(mean=KITTI.mean(), std=KITTI.std())
@@ -52,7 +54,7 @@ def run(args):
     device_count = torch.cuda.device_count()
     if device_count > 1:
         print("Using %d GPU(s)" % device_count)
-        model = nn.DataParallel(model)
+        model = nn.DistributedDataParallel(model)
         args.batch_size = device_count * args.batch_size
         args.val_batch_size = device_count * args.val_batch_size
 
@@ -63,6 +65,7 @@ def run(args):
 
     criterion = nn.CrossEntropyLoss(weight=KITTI.class_weights()).to(device)
     optimizer = optim.Adam(model.parameters(), lr=args.lr)
+    scaler = torch.cuda.amp.GradScaler()
 
     if args.resume:
         if os.path.isfile(args.resume):
@@ -88,11 +91,13 @@ def run(args):
         if engine.state.iteration % args.grad_accum == 0:
             optimizer.zero_grad()
         distance, reflectivity, target = _prepare_batch(batch)
-        pred = model(distance, reflectivity)
-        loss = criterion(pred, target) / args.grad_accum
-        loss.backward()
+        with torch.cuda.amp.autocast():
+            pred = model(distance, reflectivity)
+            loss = criterion(pred, target) / args.grad_accum
+        scaler.scale(loss).backward()
         if engine.state.iteration % args.grad_accum == 0:
-            optimizer.step()
+            scaler.step(optimizer)
+            scaler.update()
 
         return loss.item()
 
@@ -196,9 +201,9 @@ def run(args):
 
 if __name__ == '__main__':
     parser = ArgumentParser('LiLaNet with PyTorch')
-    parser.add_argument('--batch-size', type=int, default=10,
+    parser.add_argument('--batch-size', type=int, default=4,
                         help='input batch size for training')
-    parser.add_argument('--val-batch-size', type=int, default=10,
+    parser.add_argument('--val-batch-size', type=int, default=4,
                         help='input batch size for validation')
     parser.add_argument('--num-workers', type=int, default=4,
                         help='number of workers')
