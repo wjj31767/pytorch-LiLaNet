@@ -1,12 +1,14 @@
 import os
 import random
 from collections import namedtuple
-
+import lmdb
+import msgpack_numpy
 import numpy as np
 import torch
 import torch.utils.data as data
 from PIL import Image
-
+import os.path as osp
+import tqdm
 from lilanet.datasets.transforms import Compose, RandomHorizontalFlip, Normalize
 
 
@@ -34,20 +36,52 @@ class KITTI(data.Dataset):
         self.lidar_path = os.path.join(self.root, 'lidar_2d')
         self.split = os.path.join(self.root, 'ImageSet', '{}.txt'.format(split))
         self.transform = transform
-        self.lidar = []
-
+        self._cache = os.path.join(self.root,"lidar_2d_cache")
         if split not in ['train', 'val', 'all']:
             raise ValueError('Invalid split! Use split="train", split="val" or split="all"')
+        if not os.path.exists(self._cache):
+            os.makedirs(self._cache)
+            for sp in ['train', 'val']:
+                self.lidar = []
 
-        with open(self.split) as file:
-            images = ['{}.npy'.format(x.strip()) for x in file.readlines()]
-            for img in images:
-                lidar_2d = os.path.join(self.lidar_path, img)
-                self.lidar.append(lidar_2d)
+                with open(os.path.join(self.root, 'ImageSet', '{}.txt'.format(sp))) as file:
+                    images = ['{}.npy'.format(x.strip()) for x in file.readlines()]
+                    for img in images:
+                        lidar_2d = os.path.join(self.lidar_path, img)
+                        self.lidar.append(lidar_2d)
+
+                with lmdb.open(
+                        osp.join(self._cache, split), map_size=1 << 33
+                ) as lmdb_env, lmdb_env.begin(write=True) as txn:
+                    for i in tqdm.trange(len(self.lidar)):
+                        fn = self.lidar[i]
+
+                        point_set = np.load(fn).astype(np.float32, copy=False)
+                        txn.put(
+                            str(i).encode(),
+                            msgpack_numpy.packb(
+                                dict(pc=point_set, ), use_bin_type=True
+                            ),
+                        )
+        self._lmdb_file = osp.join(self._cache, split)
+        with lmdb.open(self._lmdb_file, map_size=1 << 33) as lmdb_env:
+            self._len = lmdb_env.stat()["entries"]
+
+        self._lmdb_env = None
+
 
     def __getitem__(self, index):
-        record = np.load(self.lidar[index]).astype(np.float32, copy=False)
-        record = torch.as_tensor(record).permute(2, 0, 1).contiguous()
+        if self._lmdb_env is None:
+            self._lmdb_env = lmdb.open(
+                self._lmdb_file, map_size=1 << 33, readonly=True, lock=False
+            )
+
+        with self._lmdb_env.begin(buffers=True) as txn:
+            ele = msgpack_numpy.unpackb(txn.get(str(index).encode()), raw=False)
+
+        record = ele["pc"]
+        record = torch.from_numpy(record.copy()).permute(2, 0, 1).contiguous()
+        record.type=torch.float16
 
         distance = record[3, :, :]
         reflectivity = record[4, :, :]
@@ -59,7 +93,7 @@ class KITTI(data.Dataset):
         return distance, reflectivity, label
 
     def __len__(self):
-        return len(self.lidar)
+        return self._len
 
     @staticmethod
     def num_classes():
