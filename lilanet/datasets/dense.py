@@ -12,7 +12,7 @@ import tqdm
 from lilanet.datasets.transforms import Compose, RandomHorizontalFlip, Normalize
 
 
-class KITTI(data.Dataset):
+class DENSE(data.Dataset):
     """`KITTI LiDAR`_ Dataset.
 
     Args:
@@ -97,7 +97,7 @@ class KITTI(data.Dataset):
 
     @staticmethod
     def num_classes():
-        return len(KITTI.classes)
+        return len(DENSE.classes)
 
     @staticmethod
     def mean():
@@ -115,7 +115,7 @@ class KITTI(data.Dataset):
     def get_colormap():
         cmap = torch.zeros([256, 3], dtype=torch.uint8)
 
-        for cls in KITTI.classes:
+        for cls in DENSE.classes:
             cmap[cls.id, :] = torch.tensor(cls.color, dtype=torch.uint8)
 
         return cmap
@@ -126,7 +126,7 @@ if __name__ == '__main__':
 
     joint_transforms = Compose([
         RandomHorizontalFlip(),
-        Normalize(mean=KITTI.mean(), std=KITTI.std())
+        Normalize(mean=DENSE.mean(), std=DENSE.std())
     ])
 
 
@@ -142,14 +142,14 @@ if __name__ == '__main__':
 
         for l in range(1, KITTI.num_classes()):
             mask = label_map == l
-            out[mask, 0] = np.array(KITTI.classes[l].color[1])
-            out[mask, 1] = np.array(KITTI.classes[l].color[0])
-            out[mask, 2] = np.array(KITTI.classes[l].color[2])
+            out[mask, 0] = np.array(DENSE.classes[l].color[1])
+            out[mask, 1] = np.array(DENSE.classes[l].color[0])
+            out[mask, 2] = np.array(DENSE.classes[l].color[2])
 
         return out
 
 
-    dataset = KITTI('../../data/kitti', transform=joint_transforms)
+    dataset = DENSE('../../data/dense', transform=joint_transforms)
     distance, reflectivity, label = random.choice(dataset)
 
     print('Distance size: ', distance.size())
