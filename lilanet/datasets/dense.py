@@ -10,7 +10,7 @@ from PIL import Image
 import os.path as osp
 import tqdm
 from lilanet.datasets.transforms import Compose, RandomHorizontalFlip, Normalize
-
+import h5py
 
 class DENSE(data.Dataset):
     """`KITTI LiDAR`_ Dataset.
@@ -25,46 +25,43 @@ class DENSE(data.Dataset):
     Class = namedtuple('Class', ['name', 'id', 'color'])
 
     classes = [
-        Class('unknown', 0, (0, 0, 0)),
-        Class('car', 1, (0, 0, 142)),
-        Class('pedestrian', 2, (220, 20, 60)),
-        Class('cyclist', 3, (119, 11, 32)),
+        Class('unlabeled', 0, (0, 0, 0)),
+        Class('clear', 100, (0, 0, 142)),
+        Class('rain', 101, (220, 20, 60)),
+        Class('fog', 102, (119, 11, 32)),
     ]
 
     def __init__(self, root, split='train', transform=None):
         self.root = os.path.expanduser(root)
-        self.lidar_path = os.path.join(self.root, 'lidar_2d')
+        self.lidar_path = self.root
         self.split = os.path.join(self.root, 'ImageSet', '{}.txt'.format(split))
         self.transform = transform
         self._cache = os.path.join(self.root,"lidar_2d_cache")
-        if split not in ['train', 'val', 'all']:
+        if split not in ['train', 'val']:
             raise ValueError('Invalid split! Use split="train", split="val" or split="all"')
         if not os.path.exists(self._cache):
             os.makedirs(self._cache)
         if not os.path.exists(osp.join(self._cache, split)):
-                self.lidar = []
-
-                with open(os.path.join(self.root, 'ImageSet', '{}.txt'.format(split))) as file:
-                    images = ['{}.npy'.format(x.strip()) for x in file.readlines()]
-                    for img in images:
-                        lidar_2d = os.path.join(self.lidar_path, img)
-                        self.lidar.append(lidar_2d)
-
-                with lmdb.open(
-                        osp.join(self._cache, split), map_size=1 << 33
-                ) as lmdb_env, lmdb_env.begin(write=True) as txn:
-                    for i in tqdm.trange(len(self.lidar)):
-                        fn = self.lidar[i]
-
-                        point_set = np.load(fn).astype(np.float32, copy=False)
-                        txn.put(
-                            str(i).encode(),
-                            msgpack_numpy.packb(
-                                dict(pc=point_set, ), use_bin_type=True
-                            ),
-                        )
+            i = 0
+            with lmdb.open(
+                    osp.join(self._cache, split), map_size=1 << 35
+            ) as lmdb_env, lmdb_env.begin(write=True) as txn:
+                for directionary in os.listdir(self.root):
+                    if split in directionary:
+                        for classfold in os.listdir(osp.join(self.root,directionary)):
+                            print("processing",directionary,classfold)
+                            for file in tqdm.tqdm(os.listdir(osp.join(self.root,directionary,classfold))):
+                                with h5py.File(osp.join(self.root,directionary,classfold,file), "r") as f:
+                                    point_set = np.hstack((np.array(f["sensorX_1"]), np.array(f["sensorY_1"]),np.array(f["sensorZ_1"]), np.array(f['distance_m_1']),np.array(f['intensity_1']), np.array(f['labels_1'])))
+                                    txn.put(
+                                        str(i).encode(),
+                                        msgpack_numpy.packb(
+                                            dict(pc=point_set), use_bin_type=True
+                                        ),
+                                    )
+                                i+=1
         self._lmdb_file = osp.join(self._cache, split)
-        with lmdb.open(self._lmdb_file, map_size=1 << 33) as lmdb_env:
+        with lmdb.open(self._lmdb_file, map_size=1 << 35) as lmdb_env:
             self._len = lmdb_env.stat()["entries"]
 
         self._lmdb_env = None
@@ -73,15 +70,14 @@ class DENSE(data.Dataset):
     def __getitem__(self, index):
         if self._lmdb_env is None:
             self._lmdb_env = lmdb.open(
-                self._lmdb_file, map_size=1 << 33, readonly=True, lock=False
+                self._lmdb_file, map_size=1 << 35, readonly=True, lock=False
             )
 
         with self._lmdb_env.begin(buffers=True) as txn:
             ele = msgpack_numpy.unpackb(txn.get(str(index).encode()), raw=False)
 
-        record = ele["pc"]
+        record = ele["pc"].reshape(32,400,6)
         record = torch.from_numpy(record.copy()).permute(2, 0, 1).contiguous()
-        record.type=torch.float16
 
         distance = record[3, :, :]
         reflectivity = record[4, :, :]
@@ -140,7 +136,7 @@ if __name__ == '__main__':
 
         out = np.zeros((label_map.shape[0], label_map.shape[1], 3))
 
-        for l in range(1, KITTI.num_classes()):
+        for l in range(1, DENSE.num_classes()):
             mask = label_map == l
             out[mask, 0] = np.array(DENSE.classes[l].color[1])
             out[mask, 1] = np.array(DENSE.classes[l].color[0])
@@ -150,6 +146,7 @@ if __name__ == '__main__':
 
 
     dataset = DENSE('../../data/dense', transform=joint_transforms)
+    print(dataset.__len__())
     distance, reflectivity, label = random.choice(dataset)
 
     print('Distance size: ', distance.size())
