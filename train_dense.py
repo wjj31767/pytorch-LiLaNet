@@ -14,7 +14,7 @@ from torch.utils.data import DataLoader
 
 from lilanet.datasets import DENSE, Normalize, Compose, RandomHorizontalFlip
 from lilanet.datasets.transforms import ToTensor
-from lilanet.model import LiLaNet
+from lilanet.model import WeatherNet
 from lilanet.utils import save
 torch.backends.cudnn.benchmark = True
 torch.backends.cudnn.deterministic = True
@@ -33,7 +33,7 @@ def get_data_loaders(data_dir, batch_size, val_batch_size, num_workers):
         normalize
     ])
 
-    train_loader = DataLoader(DENSE(root=data_dir, split='val', transform=transforms),
+    train_loader = DataLoader(DENSE(root=data_dir, split='train', transform=transforms),
                               batch_size=batch_size, shuffle=True, num_workers=num_workers, pin_memory=True)
 
     val_loader = DataLoader(DENSE(root=data_dir, split='val', transform=val_transforms),
@@ -49,7 +49,7 @@ def run(args):
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 
     num_classes = DENSE.num_classes()
-    model = LiLaNet(num_classes)
+    model = WeatherNet(num_classes)
 
     device_count = torch.cuda.device_count()
     if device_count > 1:
@@ -59,7 +59,6 @@ def run(args):
         args.val_batch_size = device_count * args.val_batch_size
 
     model = model.to(device)
-
     train_loader, val_loader = get_data_loaders(args.dataset_dir, args.batch_size, args.val_batch_size,
                                                 args.num_workers)
 
@@ -201,10 +200,10 @@ def run(args):
 
 
 if __name__ == '__main__':
-    parser = ArgumentParser('LiLaNet with PyTorch')
-    parser.add_argument('--batch-size', type=int, default=8,
+    parser = ArgumentParser('WeatherNet with PyTorch')
+    parser.add_argument('--batch-size', type=int, default=4,
                         help='input batch size for training')
-    parser.add_argument('--val-batch-size', type=int, default=8,
+    parser.add_argument('--val-batch-size', type=int, default=4,
                         help='input batch size for validation')
     parser.add_argument('--num-workers', type=int, default=4,
                         help='number of workers')
