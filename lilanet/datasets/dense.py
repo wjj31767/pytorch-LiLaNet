@@ -27,9 +27,9 @@ class DENSE(data.Dataset):
 
     classes = [
         Class('unlabeled', 0, (0, 0, 0)),
-        Class('clear', 100, (0, 0, 142)),
-        Class('rain', 101, (220, 20, 60)),
-        Class('fog', 102, (119, 11, 32)),
+        Class('clear', 1, (0, 0, 142)),
+        Class('rain', 2, (220, 20, 60)),
+        Class('fog', 3, (119, 11, 32)),
     ]
 
     def __init__(self, root, split='val', transform=None):
@@ -62,9 +62,9 @@ class DENSE(data.Dataset):
                                         classfold))):
                                 with h5py.File(osp.join(self.root, directionary, classfold, file), "r") as f:
                                     label = np.array(f['labels_1'])
-                                    label[label == 100] = 0
-                                    label[label == 101] = 1
-                                    label[label == 102] = 2
+                                    label[label == 100] = 1
+                                    label[label == 101] = 2
+                                    label[label == 102] = 3
                                     point_set = np.dstack(
                                         (np.array(
                                             f["sensorX_1"]), np.array(
