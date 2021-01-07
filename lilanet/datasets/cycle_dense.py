@@ -47,7 +47,7 @@ class CYCLEDENSE(data.Dataset):
                 'Invalid class! Use clss="clear", split="rain" or split="fog"')
         if not os.path.exists(self._cache):
             os.makedirs(self._cache)
-        if not os.path.exists(osp.join(self._cache, split)):
+        if not os.path.exists(osp.join(self._cache, split+"_"+clss)):
             i = 0
             with lmdb.open(
                     osp.join(self._cache, split+"_"+clss), map_size=1 << 34
