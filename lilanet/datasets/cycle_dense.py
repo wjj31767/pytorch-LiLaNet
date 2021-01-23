@@ -11,7 +11,29 @@ import os.path as osp
 import tqdm
 from lilanet.datasets.transforms import Compose, RandomHorizontalFlip, Normalize
 import h5py
+from torch.utils.data import Dataset
+import numpy as np
+import mayavi.mlab as mlab
+# import kitti_util as utils
+# from viz_util import draw_lidar_simple, draw_lidar, draw_gt_boxes3d
 
+class Image2ImageDataset(Dataset):
+
+    def __init__(self, ds_a, ds_b):
+        self.dataset_a = ds_a
+        self.dataset_b = ds_b
+
+    def __len__(self):
+        return max(len(self.dataset_a), len(self.dataset_b))
+
+    def __getitem__(self, i):
+        dp_a = self.dataset_a[i % len(self.dataset_a)]
+        j = random.randint(0, len(self.dataset_b) - 1)
+        dp_b = self.dataset_b[j]
+        return {
+            'A': dp_a,
+            'B': dp_b
+        }
 
 class CYCLEDENSE(data.Dataset):
     """`KITTI LiDAR`_ Dataset.
@@ -44,7 +66,7 @@ class CYCLEDENSE(data.Dataset):
                 'Invalid split! Use split="train", split="val" or split="all"')
         if clss not in ['clear', 'rain','fog']:
             raise ValueError(
-                'Invalid class! Use clss="clear", split="rain" or split="fog"')
+                'Invalid class! Use cls="clear", split="rain" or split="fog"')
         if not os.path.exists(self._cache):
             os.makedirs(self._cache)
         if not os.path.exists(osp.join(self._cache, split+"_"+clss)):
@@ -102,15 +124,17 @@ class CYCLEDENSE(data.Dataset):
 
         record = ele["pc"].astype(np.float32)
         record = torch.from_numpy(record.copy()).permute(2, 0, 1).contiguous()
+        pc = record[:3,:,:]
         distance = record[3, :, :]
         reflectivity = record[4, :, :]
         label = record[5, :, :]
         if self.transform:
             distance, reflectivity, label = self.transform(
                 distance, reflectivity, label)
-
-        return distance, reflectivity, label
-
+        # out = torch.cat([distance,reflectivity,label],0)
+        # preprocessing
+        return torch.cat([distance,reflectivity],0)
+        # return pc,distance,reflectivity,label
     def __len__(self):
         return self._len
 
@@ -120,11 +144,11 @@ class CYCLEDENSE(data.Dataset):
 
     @staticmethod
     def mean():
-        return [0.21, 12.12]
+        return [0.5, 0.5, 0.5]
 
     @staticmethod
     def std():
-        return [0.16, 12.32]
+        return [0.5, 0.5, 0.5]
 
     @staticmethod
     def class_weights():
@@ -148,8 +172,10 @@ if __name__ == '__main__':
         Normalize(mean=CYCLEDENSE.mean(), std=CYCLEDENSE.std())
     ])
 
+
     def _normalize(x):
         return (x - x.min()) / (x.max() - x.min())
+
 
     def visualize_seg(label_map, one_hot=False):
         if one_hot:
@@ -164,35 +190,20 @@ if __name__ == '__main__':
             out[mask, 2] = np.array(CYCLEDENSE.classes[l].color[2])
 
         return out
-    for split in ['train','val']:
-        for clss in ['clear','fog','rain']:
-            dataset = CYCLEDENSE('../../data/dense', split=split,clss=clss,transform=joint_transforms)
-    distance, reflectivity, label = random.choice(dataset)
+
+
+    dataset = CYCLEDENSE('../../data/dense', clss="clear",transform=joint_transforms)
+    pc, distance, reflectivity,label = dataset[303]
 
     print('Distance size: ', distance.size())
     print('Reflectivity size: ', reflectivity.size())
     print('Label size: ', label.size())
 
-    distance_map = Image.fromarray(
-        (255 *
-         _normalize(
-             distance.numpy())).astype(
-            np.uint8))
-    reflectivity_map = Image.fromarray(
-        (255 *
-         _normalize(
-             reflectivity.numpy())).astype(
-            np.uint8))
-    label_map = Image.fromarray(
-        (255 *
-         visualize_seg(
-             label.numpy())).astype(
-            np.uint8))
+    distance_map = Image.fromarray((255 * _normalize(distance.numpy())).astype(np.uint8))
+    reflectivity_map = Image.fromarray((255 * _normalize(reflectivity.numpy())).astype(np.uint8))
+    label_map = Image.fromarray((255 * visualize_seg(label.numpy())).astype(np.uint8))
 
-    blend_map = Image.blend(
-        distance_map.convert('RGBA'),
-        label_map.convert('RGBA'),
-        alpha=0.4)
+    blend_map = Image.blend(distance_map.convert('RGBA'), label_map.convert('RGBA'), alpha=0.4)
 
     plt.figure(figsize=(10, 5))
     plt.subplot(221)
@@ -209,3 +220,62 @@ if __name__ == '__main__':
     plt.imshow(blend_map)
 
     plt.show()
+    pc = pc.reshape(3,-1).transpose(1,0)
+    fig = mlab.figure(
+        figure=None, bgcolor=(0, 0, 0), fgcolor=None, engine=None, size=(1600, 1000)
+    )
+
+    # draw points
+    mlab.points3d(
+        pc[:, 0],
+        pc[:, 1],
+        pc[:, 2],
+        color=None,
+        mode="point",
+        colormap="gnuplot",
+        scale_factor=1,
+        figure=fig,
+    )
+
+    # draw origin
+    mlab.points3d(0, 0, 0, color=(1, 1, 1), mode="sphere", scale_factor=0.2)
+    # draw axis
+    axes = np.array(
+        [[2.0, 0.0, 0.0, 0.0], [0.0, 2.0, 0.0, 0.0], [0.0, 0.0, 2.0, 0.0]],
+        dtype=np.float64,
+    )
+    mlab.plot3d(
+        [0, axes[0, 0]],
+        [0, axes[0, 1]],
+        [0, axes[0, 2]],
+        color=(1, 0, 0),
+        tube_radius=None,
+        figure=fig,
+    )
+    mlab.plot3d(
+        [0, axes[1, 0]],
+        [0, axes[1, 1]],
+        [0, axes[1, 2]],
+        color=(0, 1, 0),
+        tube_radius=None,
+        figure=fig,
+    )
+    mlab.plot3d(
+        [0, axes[2, 0]],
+        [0, axes[2, 1]],
+        [0, axes[2, 2]],
+        color=(0, 0, 1),
+        tube_radius=None,
+        figure=fig,
+    )
+    mlab.view(
+        azimuth=180,
+        elevation=70,
+        focalpoint=[12.0909996, -1.04700089, -2.03249991],
+        distance=62.0,
+        figure=fig,
+    )
+
+    mlab.show()
+
+

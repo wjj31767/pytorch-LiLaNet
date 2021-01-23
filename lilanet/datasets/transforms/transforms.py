@@ -24,7 +24,7 @@ class ToTensor(object):
     def __call__(self, distance, reflectivity, label):
         distance = distance.unsqueeze(0)
         reflectivity = reflectivity.unsqueeze(0)
-        label = label.long()
+        label = label.unsqueeze(0)
 
         return distance, reflectivity, label
 
@@ -44,7 +44,7 @@ class Normalize(object):
     def __call__(self, distance, reflectivity, label):
         distance = self._normalize(distance, self.mean[0], self.std[0])
         reflectivity = self._normalize(reflectivity, self.mean[1], self.std[1])
-
+        # label = self._normalize(label,self.mean[2],self.std[2])
         return distance, reflectivity, label
 
     @staticmethod

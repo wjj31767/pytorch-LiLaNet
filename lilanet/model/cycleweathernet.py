@@ -20,42 +20,50 @@ class Generator(nn.Module):
         # Reflection padding
         self.pad = torch.nn.ReflectionPad2d(3)
         # Encoder
-        self.conv1 = ConvBlock(input_dim, num_filter, kernel_size=7, stride=1, padding=0)
-        self.conv2 = ConvBlock(num_filter, num_filter * 2)
-        self.conv3 = ConvBlock(num_filter * 2, num_filter * 4)
-        # Resnet blocks
-        self.resnet_blocks = []
-        for i in range(num_lilablock):
-            self.resnet_blocks.append(LiLaBlock(num_filter * 4,num_filter * 4))
-        self.resnet_blocks = torch.nn.Sequential(*self.resnet_blocks)
+        self.conv1 = LiLaBlock(input_dim, num_filter)
+        self.conv2 = LiLaBlock(num_filter, num_filter * 2)
+        self.conv3 = LiLaBlock(num_filter * 2, num_filter * 4)
+
         # Decoder
-        self.deconv1 = DeconvBlock(num_filter * 4, num_filter * 2)
-        self.deconv2 = DeconvBlock(num_filter * 2, num_filter)
-        self.deconv3 = ConvBlock(num_filter, output_dim,
-                                 kernel_size=7, stride=1, padding=0, activation='tanh', batch_norm=False)
+        self.deconv1 = LiLaBlock(num_filter * 4, num_filter * 2)
+        self.deconv2 = LiLaBlock(num_filter * 2, num_filter)
+        self.deconv3 = LiLaBlock(num_filter, output_dim)
 
 
-    def forward(self, distance, reflectivity):
-        x = torch.cat([distance, reflectivity], 1)
+    def forward(self, x):
         # Encoder
-        print("Generate input shape", x.shape)
-        enc1 = self.conv1(self.pad(x))
+        enc1 = self.conv1(x)
         enc2 = self.conv2(enc1)
         enc3 = self.conv3(enc2)
         # Resnet blocks
-        res = self.resnet_blocks(enc3)
+        # res = self.resnet_blocks(enc3)
         # Decoder
-        dec1 = self.deconv1(res)
+        dec1 = self.deconv1(enc3)
         dec2 = self.deconv2(dec1)
-        out = self.deconv3(self.pad(dec2))
+        out = self.deconv3(dec2)
         return out
 
     def normal_weight_init(self, mean=0.0, std=0.02):
         for m in self.children():
             if isinstance(m, ConvBlock):
-                torch.nn.init.normal(m.conv.weight, mean, std)
+                torch.nn.init.normal_(m.conv.weight, mean, std)
             if isinstance(m, DeconvBlock):
-                torch.nn.init.normal(m.deconv.weight, mean, std)
+                torch.nn.init.normal_(m.deconv.weight, mean, std)
+            if isinstance(m, LiLaBlock):
+                if isinstance(m, nn.Conv2d):
+                    nn.init.kaiming_normal_(
+                        m.weight, mode='fan_out', nonlinearity='relu')
+                    if m.bias is not None:
+                        nn.init.constant_(m.bias, 0)
+                elif isinstance(m, nn.BatchNorm2d):
+                    nn.init.constant_(m.weight, 1)
+                    nn.init.constant_(m.bias, 0)
+    def xavier_weight_init(self):
+        for m in self.children():
+            if isinstance(m, ConvBlock):
+                torch.nn.init.xavier_normal_(m.conv.weight)
+            if isinstance(m, DeconvBlock):
+                torch.nn.init.xavier_normal_(m.deconv.weight)
             if isinstance(m, LiLaBlock):
                 if isinstance(m, nn.Conv2d):
                     nn.init.kaiming_normal_(
@@ -92,15 +100,35 @@ class Discriminator(nn.Module):
             conv5
         )
 
-    def forward(self, distance, reflectivity):
-        x = torch.cat([distance, reflectivity], 1)
+    def forward(self, x):
         out = self.conv_blocks(x)
         return out
     def normal_weight_init(self, mean=0.0, std=0.02):
         for m in self.children():
             if isinstance(m, ConvBlock):
                 torch.nn.init.normal(m.conv.weight, mean, std)
+class ResnetBlock(torch.nn.Module):
+    def __init__(self, num_filter, kernel_size=3, stride=1, padding=0):
+        super(ResnetBlock, self).__init__()
+        conv1 = torch.nn.Conv2d(num_filter, num_filter, kernel_size, stride, padding)
+        conv2 = torch.nn.Conv2d(num_filter, num_filter, kernel_size, stride, padding)
+        bn = torch.nn.InstanceNorm2d(num_filter)
+        relu = torch.nn.ReLU(True)
+        pad = torch.nn.ReflectionPad2d(1)
 
+        self.resnet_block = torch.nn.Sequential(
+            pad,
+            conv1,
+            bn,
+            relu,
+            pad,
+            conv2,
+            bn
+        )
+
+    def forward(self, x):
+        out = self.resnet_block(x)
+        return out
 class LiLaBlock(nn.Module):
 
     def __init__(self, in_channels, n):
@@ -135,7 +163,7 @@ class LiLaBlock(nn.Module):
 class ConvBlock(torch.nn.Module):
     def __init__(self, input_size, output_size, kernel_size=3, stride=2, padding=1, activation='relu', batch_norm=True):
         super(ConvBlock, self).__init__()
-        self.conv = torch.nn.Conv2d(input_size, output_size, kernel_size, stride, padding)
+        self.conv = torch.nn.Conv2d(input_size, output_size, kernel_size, (1,stride), (0,padding))
         self.batch_norm = batch_norm
         self.bn = torch.nn.InstanceNorm2d(output_size)
         self.activation = activation
@@ -161,11 +189,12 @@ class ConvBlock(torch.nn.Module):
 class DeconvBlock(torch.nn.Module):
     def __init__(self, input_size, output_size, kernel_size=3, stride=2, padding=1, output_padding=1, activation='relu', batch_norm=True):
         super(DeconvBlock, self).__init__()
-        self.deconv = torch.nn.ConvTranspose2d(input_size, output_size, kernel_size, stride, padding, output_padding)
+        self.deconv = torch.nn.ConvTranspose2d(input_size, output_size, kernel_size, (1,stride), (0,padding), (0,output_padding))
         self.batch_norm = batch_norm
         self.bn = torch.nn.InstanceNorm2d(output_size)
         self.activation = activation
         self.relu = torch.nn.ReLU(True)
+        self.lrelu = torch.nn.LeakyReLU(0.2, True)
 
     def forward(self, x):
         if self.batch_norm:
@@ -196,14 +225,17 @@ class BasicConv2d(nn.Module):
 
 
 if __name__ == '__main__':
-    num_classes, height, width = 3, 32, 400
+    num_classes, height, width = 2, 32, 400
 
-    model = Generator(2, 32, 3, 5)  # .to('cuda')
+    model = Generator(2, 32, 2, 5)  # .to('cuda')
     inp = torch.randn(5, 1, height, width)  # .to('cuda')
-
-    out = model(inp, inp)
-    D_A = Discriminator(2, 32, 1)
-    print(D_A(inp,inp).shape)
+    print(inp.max(),inp.min())
+    x = torch.cat([inp,inp],1)
+    print(x.shape)
+    out = model(x)
+    print(out.shape)
+    D_A = Discriminator(2, 64, 1)
+    print(D_A(x).shape)
     assert out.size() == torch.Size([5, num_classes, height, width])
 
     print('Pass size check.')
